@@ -28,4 +28,4 @@ chrono = "0.4"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
-zip = "7.0"
+zip = "7.2"
