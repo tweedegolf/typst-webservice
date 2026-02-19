@@ -19,4 +19,3 @@ COPY --chown=nonroot:nonroot --chmod=755 ./typst-webservice-linux-x64 ./typst-we
 EXPOSE 3000
 ENV VERSION=${version}
 ENTRYPOINT ["./typst-webservice"]
-CMD [ "0.0.0.0:8080" ]
