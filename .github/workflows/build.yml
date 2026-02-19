@@ -108,6 +108,9 @@ jobs:
       - build
     if: needs.check-version.outputs.should_run == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v6
 
