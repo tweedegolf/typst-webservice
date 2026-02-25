@@ -1,6 +1,6 @@
 [package]
 name = "typst-webservice"
-version = "0.2.3"
+version = "0.3.0"
 edition = "2024"
 
 [features]
@@ -28,4 +28,4 @@ chrono = "0.4"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
-zip = "7.0"
+zip = "8.1"

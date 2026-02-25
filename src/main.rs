@@ -1,4 +1,4 @@
-use std::{env, io, net::Ipv4Addr, sync::Arc};
+use std::{env, io, sync::Arc};
 
 use tokio::net::TcpListener;
 use tracing::info;
@@ -10,7 +10,11 @@ use crate::{error::AppError, pdf::PdfContext};
 
 const DEFAULT_ASSETS_DIR: &str = "assets";
 const ASSETS_DIR_ENV_VAR: &str = "TWS_DIR";
+
 const DEFAULT_PORT: u16 = 8080;
+const DEFAULT_HOST: &str = "127.0.0.1";
+
+const HOST_ENV_VAR: &str = "TWS_HOST";
 const PORT_ENV_VAR: &str = "TWS_PORT";
 
 /// OpenAPI descriptor for the Typst webservice.
@@ -25,14 +29,27 @@ mod pdf;
 mod zip;
 
 #[cfg(test)]
+mod cli_tests;
+
+#[cfg(test)]
 mod tests;
 
 #[tokio::main]
 /// Launch the HTTP server and publish the PDF rendering endpoint.
 async fn main() -> Result<(), AppError> {
+    let cli_args = parse_cli_args();
+    if cli_args.show_version {
+        println!("Typst webservice version {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     logging::init();
     info!("Starting Typst webservice");
-    let assets_dir = resolve_assets_dir();
+    if !cli_args.extra.is_empty() {
+        tracing::warn!(extra = ?cli_args.extra, "Ignoring unrecognized CLI arguments");
+    }
+
+    let assets_dir = resolve_assets_dir(cli_args.assets_dir);
     info!(%assets_dir, "Loading Typst assets");
     let pdf_context = Arc::new(PdfContext::from_directory(&assets_dir)?);
 
@@ -43,14 +60,11 @@ async fn main() -> Result<(), AppError> {
 
     let router = router.merge(SwaggerUi::new("/").url("/apidoc/openapi.json", api));
 
-    let port = env::var(PORT_ENV_VAR)
-        .ok()
-        .and_then(|value| value.parse::<u16>().ok())
-        .unwrap_or(DEFAULT_PORT);
+    let addr = resolve_addr(cli_args.addr);
 
     // Bind to all interfaces on the requested port
-    info!("Binding HTTP listener on 0.0.0.0:{}", port);
-    let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, port)).await?;
+    info!("Binding HTTP listener on {}", addr);
+    let listener = TcpListener::bind(&addr).await?;
 
     info!("HTTP listener ready; serving requests");
     if let Err(error) = axum::serve(listener, router).await {
@@ -62,9 +76,8 @@ async fn main() -> Result<(), AppError> {
 }
 
 /// Determine the directory containing Typst assets from CLI args or environment.
-fn resolve_assets_dir() -> String {
-    env::args()
-        .nth(1)
+fn resolve_assets_dir(assets_arg: Option<String>) -> String {
+    assets_arg
         .filter(|arg| !arg.is_empty())
         .or_else(|| {
             env::var(ASSETS_DIR_ENV_VAR)
@@ -72,4 +85,90 @@ fn resolve_assets_dir() -> String {
                 .filter(|value| !value.is_empty())
         })
         .unwrap_or_else(|| DEFAULT_ASSETS_DIR.to_string())
+}
+
+fn resolve_addr(addr_arg: Option<AddrOverride>) -> String {
+    let host = env::var(HOST_ENV_VAR).unwrap_or_else(|_| DEFAULT_HOST.to_string());
+    let port = env::var(PORT_ENV_VAR)
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(DEFAULT_PORT);
+
+    match addr_arg {
+        Some(AddrOverride::Full(addr)) => addr,
+        Some(AddrOverride::Port(port_override)) => format!("{host}:{port_override}"),
+        None => format!("{host}:{port}"),
+    }
+}
+
+#[derive(Debug)]
+struct CliArgs {
+    show_version: bool,
+    assets_dir: Option<String>,
+    addr: Option<AddrOverride>,
+    extra: Vec<String>,
+}
+
+#[derive(Debug)]
+enum AddrOverride {
+    Full(String),
+    Port(u16),
+}
+
+fn parse_cli_args() -> CliArgs {
+    parse_cli_args_from(env::args().skip(1))
+}
+
+fn parse_cli_args_from<I, S>(args: I) -> CliArgs
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    let mut show_version = false;
+    let mut assets_dir = None;
+    let mut addr = None;
+    let mut extra = Vec::new();
+
+    for arg in args {
+        let arg = arg.into();
+        if arg == "--version" || arg == "-v" {
+            show_version = true;
+            continue;
+        }
+
+        if addr.is_none()
+            && let Some(parsed) = parse_addr_arg(&arg)
+        {
+            addr = Some(parsed);
+            continue;
+        }
+
+        if assets_dir.is_none() {
+            assets_dir = Some(arg);
+            continue;
+        }
+
+        extra.push(arg);
+    }
+
+    CliArgs {
+        show_version,
+        assets_dir,
+        addr,
+        extra,
+    }
+}
+
+fn parse_addr_arg(arg: &str) -> Option<AddrOverride> {
+    if let Ok(port) = arg.parse::<u16>() {
+        return Some(AddrOverride::Port(port));
+    }
+
+    let (host, port_str) = arg.rsplit_once(':')?;
+    if host.is_empty() {
+        return None;
+    }
+
+    let _ = port_str.parse::<u16>().ok()?;
+    Some(AddrOverride::Full(arg.to_string()))
 }
