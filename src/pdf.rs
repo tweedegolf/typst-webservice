@@ -99,6 +99,50 @@ impl PdfContext {
         })
     }
 
+    /// Build a context from in-memory assets provided as (filename, contents) tuples.
+    pub fn from_assets(assets: Vec<(&str, &[u8])>) -> AppResult<PdfContext> {
+        info!(count = assets.len(), "Loading assets from memory");
+        let mut sources = Vec::new();
+        let mut binaries = HashMap::new();
+        let mut fonts = Vec::new();
+        let mut fontbook = FontBook::new();
+
+        for (name, contents) in assets {
+            let path = Path::new(name);
+            let ext = path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| ext.to_lowercase());
+            let file_id = FileId::new(None, VirtualPath::new(path));
+
+            match ext.as_deref() {
+                Some("typ") | Some("typst") => {
+                    let content = String::from_utf8(contents.to_vec()).map_err(|error| {
+                        std::io::Error::new(std::io::ErrorKind::InvalidData, error)
+                    })?;
+                    sources.push(Source::new(file_id, content));
+                }
+                Some("ttf") | Some("otf") | Some("woff") | Some("woff2") => {
+                    if let Some(font) = Font::new(Bytes::new(contents.to_vec()), 0) {
+                        fontbook.push(font.info().clone());
+                        fonts.push(font);
+                    }
+                }
+                _ => {
+                    binaries.insert(file_id, Bytes::new(contents.to_vec()));
+                }
+            }
+        }
+
+        Ok(PdfContext {
+            sources,
+            library: LazyHash::new(Library::default()),
+            fontbook: LazyHash::new(fontbook),
+            assets: binaries,
+            fonts,
+        })
+    }
+
     /// Check whether a template with the provided name exists in the context.
     pub fn has_template(&self, source_name: &str) -> bool {
         self.sources.iter().any(|source| {
