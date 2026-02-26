@@ -4,23 +4,22 @@ use axum::{
     Router,
     body::{self, Body},
     http::{Request, StatusCode},
+    routing::{get, post},
 };
 use tower::util::ServiceExt;
-use utoipa::OpenApi;
-use utoipa_axum::{router::OpenApiRouter, routes};
-use utoipa_swagger_ui::SwaggerUi;
 
 use crate::{handlers, logging, pdf::PdfContext};
 
 /// Construct an Axum router wired with the application's routes for testing.
 fn build_router() -> Router {
     let context = Arc::new(PdfContext::from_directory("./assets").unwrap());
-    let (router, api) = OpenApiRouter::with_openapi(crate::ApiDoc::openapi())
-        .routes(routes!(handlers::render_pdf, handlers::render_pdf_batch))
+    Router::new()
+        .route(
+            "/render-pdf/{template}/{file_name}",
+            get(handlers::render_pdf),
+        )
+        .route("/render-pdf/batch", post(handlers::render_pdf_batch))
         .with_state(context)
-        .split_for_parts();
-
-    router.merge(SwaggerUi::new("/").url("/apidoc/openapi.json", api))
 }
 
 #[tokio::test]

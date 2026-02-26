@@ -1,16 +1,13 @@
 use std::{io, sync::Arc};
 
+use axum::{
+    Router,
+    routing::{get, post},
+};
 use tokio::net::TcpListener;
 use tracing::info;
-use utoipa::OpenApi;
-use utoipa_axum::{router::OpenApiRouter, routes};
-use utoipa_swagger_ui::SwaggerUi;
 
 pub use crate::{error::AppError, pdf::PdfContext};
-
-/// OpenAPI descriptor for the Typst webservice.
-#[derive(OpenApi)]
-struct ApiDoc;
 
 mod assets;
 mod error;
@@ -25,12 +22,13 @@ mod tests;
 /// Launch the HTTP server and publish the PDF rendering endpoint.
 pub async fn start_server(listener: TcpListener, pdf_context: PdfContext) -> Result<(), AppError> {
     let pdf_context = Arc::new(pdf_context);
-    let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
-        .routes(routes!(handlers::render_pdf, handlers::render_pdf_batch))
-        .with_state(pdf_context)
-        .split_for_parts();
-
-    let router = router.merge(SwaggerUi::new("/").url("/apidoc/openapi.json", api));
+    let router = Router::new()
+        .route(
+            "/render-pdf/{template}/{file_name}",
+            get(handlers::render_pdf),
+        )
+        .route("/render-pdf/batch", post(handlers::render_pdf_batch))
+        .with_state(pdf_context);
 
     info!("HTTP listener ready; serving requests");
     if let Err(error) = axum::serve(listener, router).await {

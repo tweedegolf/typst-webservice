@@ -9,7 +9,6 @@ use axum::{
 use axum_extra::response::Attachment;
 use tokio::task::JoinSet;
 use tracing::{debug, info, instrument};
-use utoipa::ToSchema;
 
 use crate::{
     error::AppError,
@@ -20,15 +19,6 @@ use crate::{
 const BATCH_ARCHIVE_NAME: &str = "rendered-pdfs.zip";
 
 /// Render a Typst template into a PDF and stream it back to the client.
-#[utoipa::path(
-    method(get, head),
-    path = "/render-pdf/{template_name}/{file_name}",
-    responses(
-        (status = OK, description = "Success", body = Vec<u8>, content_type = "application/pdf"),
-        (status = NOT_FOUND, description = "Template not found"),
-        (status = INTERNAL_SERVER_ERROR, description = "Internal server error")
-    )
-)]
 #[instrument(skip(pdf_context, input), fields(template = %template, file_name = %file_name))]
 pub(crate) async fn render_pdf(
     State(pdf_context): State<Arc<PdfContext>>,
@@ -53,7 +43,7 @@ pub(crate) async fn render_pdf(
 }
 
 /// Batch request configuration for PDF rendering.
-#[derive(Debug, serde::Deserialize, ToSchema)]
+#[derive(Debug, serde::Deserialize)]
 pub(crate) struct BatchRenderRequest {
     /// Name of the Typst template to render.
     template: String,
@@ -64,16 +54,6 @@ pub(crate) struct BatchRenderRequest {
 }
 
 /// Render multiple Typst templates and stream the PDFs as a ZIP archive.
-#[utoipa::path(
-    method(post),
-    path = "/render-pdf/batch",
-    request_body = Vec<BatchRenderRequest>,
-    responses(
-        (status = OK, description = "Success", body = Vec<u8>, content_type = "application/zip"),
-        (status = NOT_FOUND, description = "Template not found"),
-        (status = INTERNAL_SERVER_ERROR, description = "Internal server error")
-    )
-)]
 #[instrument(skip(pdf_context, requests))]
 pub(crate) async fn render_pdf_batch(
     State(pdf_context): State<Arc<PdfContext>>,

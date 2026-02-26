@@ -100,7 +100,7 @@ impl PdfContext {
     }
 
     /// Build a context from in-memory assets provided as (filename, contents) tuples.
-    pub fn from_assets(assets: Vec<(&str, &[u8])>) -> AppResult<PdfContext> {
+    pub fn from_assets(assets: &[(&str, &[u8])]) -> AppResult<PdfContext> {
         info!(count = assets.len(), "Loading assets from memory");
         let mut sources = Vec::new();
         let mut binaries = HashMap::new();
