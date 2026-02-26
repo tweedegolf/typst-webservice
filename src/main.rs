@@ -1,8 +1,9 @@
 use std::env;
 
+use tokio::net::TcpListener;
 use tracing::info;
 
-use typst_webservice::{AppError, logging, pdf::PdfContext, start_typst_server};
+use typst_webservice::{AppError, logging, pdf::PdfContext, start_server};
 
 const DEFAULT_ASSETS_DIR: &str = "assets";
 const ASSETS_DIR_ENV_VAR: &str = "TWS_DIR";
@@ -37,7 +38,10 @@ async fn main() -> Result<(), AppError> {
 
     let addr = resolve_addr(cli_args.addr);
 
-    start_typst_server(addr, pdf_context).await
+    info!("Binding HTTP listener on {}", addr);
+    let listener = TcpListener::bind(&addr).await?;
+
+    start_server(listener, pdf_context).await
 }
 
 /// Determine the directory containing Typst assets from CLI args or environment.

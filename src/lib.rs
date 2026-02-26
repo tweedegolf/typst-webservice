@@ -23,7 +23,7 @@ mod zip;
 mod tests;
 
 /// Launch the HTTP server and publish the PDF rendering endpoint.
-pub async fn start_typst_server(addr: String, pdf_context: PdfContext) -> Result<(), AppError> {
+pub async fn start_server(listener: TcpListener, pdf_context: PdfContext) -> Result<(), AppError> {
     let pdf_context = Arc::new(pdf_context);
     let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .routes(routes!(handlers::render_pdf, handlers::render_pdf_batch))
@@ -31,10 +31,6 @@ pub async fn start_typst_server(addr: String, pdf_context: PdfContext) -> Result
         .split_for_parts();
 
     let router = router.merge(SwaggerUi::new("/").url("/apidoc/openapi.json", api));
-
-    // Bind to all interfaces on the requested port
-    info!("Binding HTTP listener on {}", addr);
-    let listener = TcpListener::bind(&addr).await?;
 
     info!("HTTP listener ready; serving requests");
     if let Err(error) = axum::serve(listener, router).await {
