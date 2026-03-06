@@ -32,10 +32,6 @@ TWS_DIR=./my-templates cargo run
 
 The command-line argument takes precedence; both fall back to `assets/` when unset.
 
-## API Documentation
-
-The service ships with an OpenAPI description and Swagger UI. Once the server is running, open http://127.0.0.1:8080/ in your browser to explore and try out the endpoints.
-
 ## Running Tests
 
 ```bash
