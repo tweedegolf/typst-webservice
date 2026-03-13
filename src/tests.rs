@@ -8,18 +8,45 @@ use axum::{
 };
 use tower::util::ServiceExt;
 
-use crate::{handlers, logging, pdf::PdfContext};
+use crate::{CRATE_INFO, handlers, logging, pdf::PdfContext};
 
 /// Construct an Axum router wired with the application's routes for testing.
 fn build_router() -> Router {
     let context = Arc::new(PdfContext::from_directory("./assets").unwrap());
     Router::new()
+        .route("/", get(handlers::root))
         .route(
             "/render-pdf/{template}/{file_name}",
             get(handlers::render_pdf),
         )
         .route("/render-pdf/batch", post(handlers::render_pdf_batch))
         .with_state(context)
+}
+
+#[tokio::test]
+/// Verify the root endpoint reports crate identity and the available templates.
+async fn root_reports_crate_info_and_templates() {
+    logging::init_for_tests();
+    let router = build_router();
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body::to_bytes(response.into_body(), 1024).await.unwrap();
+    let text = std::str::from_utf8(&body).unwrap();
+    assert!(text.starts_with(CRATE_INFO));
+    assert!(text.contains("Templates:"));
+    assert!(text.contains("example.typ"));
 }
 
 #[tokio::test]

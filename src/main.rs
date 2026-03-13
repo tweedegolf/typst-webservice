@@ -3,7 +3,7 @@ use std::env;
 use tokio::net::TcpListener;
 use tracing::info;
 
-use typst_webservice::{AppError, logging, pdf::PdfContext, start_server};
+use typst_webservice::{AppError, CRATE_INFO, logging, pdf::PdfContext, start_server};
 
 const DEFAULT_ASSETS_DIR: &str = "assets";
 const ASSETS_DIR_ENV_VAR: &str = "TWS_DIR";
@@ -22,7 +22,7 @@ mod cli_tests;
 async fn main() -> Result<(), AppError> {
     let cli_args = parse_cli_args();
     if cli_args.show_version {
-        println!("Typst webservice version {}", env!("CARGO_PKG_VERSION"));
+        println!("{CRATE_INFO}");
         return Ok(());
     }
 

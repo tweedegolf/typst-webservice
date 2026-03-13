@@ -156,6 +156,25 @@ impl PdfContext {
         })
     }
 
+    /// Return the available template file names in stable sorted order.
+    pub fn template_names(&self) -> Vec<String> {
+        let mut templates = self
+            .sources
+            .iter()
+            .filter_map(|source| {
+                source
+                    .id()
+                    .vpath()
+                    .as_rootless_path()
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map(str::to_owned)
+            })
+            .collect::<Vec<_>>();
+        templates.sort();
+        templates
+    }
+
     /// Render a Typst template with the provided JSON payload into PDF bytes.
     pub fn render(
         context: Arc<Self>,
