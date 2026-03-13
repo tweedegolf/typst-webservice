@@ -9,6 +9,8 @@ use tracing::info;
 
 pub use crate::{error::AppError, pdf::PdfContext};
 
+pub const CRATE_INFO: &str = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"));
+
 mod assets;
 mod error;
 pub mod handlers;
@@ -23,6 +25,7 @@ mod tests;
 pub async fn start_server(listener: TcpListener, pdf_context: PdfContext) -> Result<(), AppError> {
     let pdf_context = Arc::new(pdf_context);
     let router = Router::new()
+        .route("/", get(handlers::root))
         .route(
             "/render-pdf/{template}/{file_name}",
             get(handlers::render_pdf),

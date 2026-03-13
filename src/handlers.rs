@@ -11,12 +11,24 @@ use tokio::task::JoinSet;
 use tracing::{debug, info, instrument};
 
 use crate::{
+    CRATE_INFO,
     error::AppError,
     pdf::PdfContext,
     zip::{ZipResponse, ZipResponseWriter},
 };
 
 const BATCH_ARCHIVE_NAME: &str = "rendered-pdfs.zip";
+
+/// Report the running crate name and version.
+pub(crate) async fn root(State(pdf_context): State<Arc<PdfContext>>) -> String {
+    let templates = pdf_context.template_names();
+
+    if templates.is_empty() {
+        return format!("{CRATE_INFO}\n\nTemplates:\n(none)");
+    }
+
+    format!("{CRATE_INFO}\n\nTemplates:\n{}", templates.join("\n"))
+}
 
 /// Render a Typst template into a PDF and stream it back to the client.
 #[instrument(skip(pdf_context, input), fields(template = %template, file_name = %file_name))]
