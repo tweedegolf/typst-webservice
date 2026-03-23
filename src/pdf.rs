@@ -9,6 +9,7 @@ use typst::{
     text::{Font, FontBook},
     utils::LazyHash,
 };
+use typst_pdf::{PdfOptions, PdfStandard, PdfStandards, Timestamp};
 
 use crate::{
     assets::collect_dir_contents,
@@ -202,8 +203,30 @@ impl PdfContext {
         });
 
         let pdf_gen_start = Instant::now();
-        let pdf_bytes = typst_pdf::pdf(&document, &Default::default())
-            .map_err(|errors| AppError::PdfExport(errors.into_iter().collect()))?;
+        let now = chrono::Utc::now();
+
+        let timestamp = Timestamp::new_utc(
+            Datetime::from_ymd_hms(
+                now.year(),
+                now.month() as u8,
+                now.day() as u8,
+                now.hour() as u8,
+                now.minute() as u8,
+                now.second() as u8,
+            )
+            .expect("current UTC datetime should be valid"),
+        );
+
+        let pdf_bytes = typst_pdf::pdf(
+            &document,
+            &PdfOptions {
+                timestamp: Some(timestamp),
+                standards: PdfStandards::new(&[PdfStandard::A_2a])
+                    .expect("PDF standards should be valid"),
+                ..Default::default()
+            },
+        )
+        .map_err(|errors| AppError::PdfExport(errors.into_iter().collect()))?;
 
         debug!(
             "PDF generation took {} ms",

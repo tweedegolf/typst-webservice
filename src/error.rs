@@ -79,7 +79,15 @@ impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let status = self.status_code();
         let reference = Uuid::new_v4();
+
         error!(%reference, error = ?self, "Application error encountered");
+
+        if let AppError::PdfExport(diagnostics) | AppError::TypstCompilation(diagnostics) = &self {
+            for diag in diagnostics {
+                eprintln!("Typst compilation error {reference}: {}", diag.message);
+            }
+        }
+
         let body = json!({
             "error": self.public_message(),
             "reference": reference.to_string(),

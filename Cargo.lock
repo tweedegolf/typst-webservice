@@ -3341,7 +3341,7 @@ dependencies = [
 
 [[package]]
 name = "typst-webservice"
-version = "0.5.3"
+version = "0.6.0"
 dependencies = [
  "async_zip",
  "axum",

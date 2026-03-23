@@ -65,7 +65,7 @@
 )
 #let input = json("input.json")
 
-= Hello [#input.name]
+= Hello #input.name
 #lorem(60)
 
 #for item in input.list [
