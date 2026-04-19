@@ -1,6 +1,12 @@
 use chrono::{Datelike, Timelike};
-use std::{collections::HashMap, path::Path, sync::Arc, time::Instant};
-use tracing::{debug, info, trace, warn};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+    sync::Arc,
+    time::Instant,
+};
+use tokio::task::JoinSet;
+use tracing::{debug, info, instrument, trace, warn};
 use typst::{
     Library, LibraryExt, World,
     diag::{FileError, FileResult},
@@ -14,7 +20,20 @@ use typst_pdf::{PdfOptions, PdfStandard, PdfStandards, Timestamp};
 use crate::{
     assets::collect_dir_contents,
     error::{AppError, AppResult},
+    zip::ZipResponseWriter,
 };
+
+/// A single render job inside a batch: which template to render, what file
+/// name to use inside the ZIP, and the JSON payload to inject.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct BatchRenderRequest {
+    /// Name of the Typst template to render.
+    pub template: String,
+    /// File name (including extension) for the PDF inside the archive.
+    pub file_name: String,
+    /// JSON payload injected into the Typst template.
+    pub input: serde_json::Value,
+}
 
 /// Shared Typst compilation state used when rendering PDFs.
 pub struct PdfContext {
@@ -235,6 +254,70 @@ impl PdfContext {
 
         Ok(pdf_bytes)
     }
+
+    /// Validate that every request in the batch references a known template.
+    pub fn validate_batch(&self, requests: &[BatchRenderRequest]) -> AppResult<()> {
+        let mut checked = HashSet::new();
+        for request in requests {
+            if checked.insert(request.template.as_str()) && !self.has_template(&request.template) {
+                return Err(AppError::MainSourceNotFound(request.template.clone()));
+            }
+        }
+        Ok(())
+    }
+
+    /// Render a batch of templates and write the resulting PDFs into the
+    /// provided ZIP writer. The writer is finished before returning.
+    #[instrument(skip(context, requests, writer))]
+    pub async fn render_batch_to_writer<W>(
+        context: Arc<Self>,
+        requests: Vec<BatchRenderRequest>,
+        mut writer: ZipResponseWriter<W>,
+    ) -> AppResult<W>
+    where
+        W: tokio::io::AsyncWrite + Unpin + Send + 'static,
+    {
+        context.validate_batch(&requests)?;
+
+        let mut join_set = JoinSet::new();
+        for request in requests {
+            let BatchRenderRequest {
+                template,
+                file_name,
+                input,
+            } = request;
+            let render_context = Arc::clone(&context);
+            join_set.spawn_blocking(move || {
+                PdfContext::render(render_context, template, input)
+                    .map(|pdf_bytes| (file_name, pdf_bytes))
+            });
+        }
+
+        while let Some(result) = join_set.join_next().await {
+            let (file_name, pdf_bytes) = result??;
+            writer.add_file(&file_name, &pdf_bytes).await?;
+        }
+
+        writer.finish().await
+    }
+
+    /// Render a batch of templates and return the produced ZIP archive as
+    /// bytes in memory.
+    pub async fn render_batch(
+        context: Arc<Self>,
+        requests: Vec<BatchRenderRequest>,
+    ) -> AppResult<Vec<u8>> {
+        context.validate_batch(&requests)?;
+
+        let (mut reader, tx) = tokio::io::duplex(64 * 1024);
+        let writer = ZipResponseWriter::new(tx);
+        let render_handle = tokio::spawn(Self::render_batch_to_writer(context, requests, writer));
+
+        let mut buf = Vec::new();
+        tokio::io::copy(&mut reader, &mut buf).await?;
+        render_handle.await??;
+        Ok(buf)
+    }
 }
 
 impl World for RenderInput {
@@ -342,5 +425,37 @@ mod test {
             pdf_text.contains(&name),
             "expected generated PDF to contain the dynamic name"
         );
+    }
+
+    /// Verify that `render_batch` produces a valid zip archive with each rendered PDF.
+    #[tokio::test]
+    async fn test_render_batch_produces_zip() {
+        crate::logging::init_for_tests();
+        let context = Arc::new(PdfContext::from_directory("./assets").unwrap());
+
+        let requests = vec![
+            BatchRenderRequest {
+                template: "example.typ".to_string(),
+                file_name: "first.pdf".to_string(),
+                input: serde_json::json!({ "name": "One", "list": ["Item"] }),
+            },
+            BatchRenderRequest {
+                template: "example.typ".to_string(),
+                file_name: "second.pdf".to_string(),
+                input: serde_json::json!({ "name": "Two", "list": ["Item"] }),
+            },
+        ];
+
+        let zip_bytes = PdfContext::render_batch(context, requests).await.unwrap();
+        assert!(!zip_bytes.is_empty(), "expected non-empty zip");
+
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zip_bytes)).unwrap();
+        assert_eq!(archive.len(), 2);
+        for name in ["first.pdf", "second.pdf"] {
+            let mut file = archive.by_name(name).unwrap();
+            let mut content = Vec::new();
+            std::io::Read::read_to_end(&mut file, &mut content).unwrap();
+            assert!(!content.is_empty(), "expected {name} to contain PDF data");
+        }
     }
 }

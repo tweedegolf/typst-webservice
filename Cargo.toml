@@ -1,17 +1,19 @@
 [package]
 name = "typst-webservice"
-version = "0.6.0"
+version = "0.7.0"
 license = "MIT"
 edition = "2024"
 
 [features]
-default = []
+default = ["server"]
+server = ["dep:axum", "dep:axum-extra", "dep:tokio-util"]
+chrono = []
 
 [dependencies]
-axum = "0.8"
-axum-extra = { version = "0.12", features = ["attachment"] }
+axum = { version = "0.8", optional = true }
+axum-extra = { version = "0.12", features = ["attachment"], optional = true }
 tokio = { version = "1", features = ["full"] }
-tokio-util = { version = "0.7", features = ["io"] }
+tokio-util = { version = "0.7", features = ["io"], optional = true }
 serde = "1.0"
 typst = { version = "0.14" }
 typst-pdf = { version = "0.14" }
@@ -22,6 +24,11 @@ uuid = { version = "1", features = ["v4"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 async_zip = { version = "0.0.18", default-features = false, features = ["deflate", "tokio", "chrono"] }
 chrono = "0.4"
+
+[[bin]]
+name = "typst-webservice"
+path = "src/main.rs"
+required-features = ["server"]
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

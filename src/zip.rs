@@ -1,63 +1,16 @@
 use async_zip::{Compression, ZipDateTime, ZipEntryBuilder, tokio::write::ZipFileWriter};
-use axum::{
-    body::Body,
-    http::{StatusCode, header},
-    response::{IntoResponse, Response},
-};
-use tokio::io::{AsyncWriteExt, DuplexStream};
-use tokio_util::io::ReaderStream;
+use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 use crate::error::AppError;
 
-/// A ZIP file response, that streams its contents to the client every time a file is added
-pub struct ZipResponse {
-    inner: ReaderStream<DuplexStream>,
-}
-
-impl ZipResponse {
-    /// Create a new [`ZipResponse`] with a default buffer size of 16KB.
-    pub fn new() -> (Self, ZipResponseWriter) {
-        Self::new_with_buffer_size(16 * 1024)
-    }
-
-    /// Create a new [`ZipResponse`] with a custom buffer size for the
-    /// underlying channel.
-    pub fn new_with_buffer_size(buffer_size: usize) -> (Self, ZipResponseWriter) {
-        let (reader, writer) = tokio::io::duplex(buffer_size);
-
-        (
-            Self {
-                inner: ReaderStream::new(reader),
-            },
-            ZipResponseWriter::new(writer),
-        )
-    }
-
-    /// Convert this `ZipResponse` into an Axum [`Body`] stream.
-    pub fn into_body(self) -> Body {
-        Body::from_stream(self.inner)
-    }
-}
-
-impl IntoResponse for ZipResponse {
-    fn into_response(self) -> Response<Body> {
-        (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "application/zip")],
-            self.into_body(),
-        )
-            .into_response()
-    }
-}
-
 /// Writer used to add files into a streaming ZIP archive.
-pub struct ZipResponseWriter {
-    inner: ZipFileWriter<DuplexStream>,
+pub struct ZipResponseWriter<W: AsyncWrite + Unpin> {
+    inner: ZipFileWriter<W>,
 }
 
-impl ZipResponseWriter {
-    /// Create a new writer wrapping the provided duplex stream.
-    fn new(writer: DuplexStream) -> Self {
+impl<W: AsyncWrite + Unpin> ZipResponseWriter<W> {
+    /// Create a new writer wrapping the provided async writer.
+    pub fn new(writer: W) -> Self {
         Self {
             inner: ZipFileWriter::with_tokio(writer),
         }
@@ -72,15 +25,69 @@ impl ZipResponseWriter {
     }
 
     /// Finish writing the archive and flush the underlying stream.
-    pub async fn finish(self) -> Result<(), AppError> {
-        let final_writer = self.inner.close().await?;
-
-        final_writer
-            .into_inner()
+    pub async fn finish(self) -> Result<W, AppError> {
+        let mut writer = self.inner.close().await?.into_inner();
+        writer
             .shutdown()
             .await
             .map_err(|_| AppError::ConnectionClosed)?;
+        Ok(writer)
+    }
+}
 
-        Ok(())
+#[cfg(feature = "server")]
+pub use server::ZipResponse;
+
+#[cfg(feature = "server")]
+mod server {
+    use axum::{
+        body::Body,
+        http::{StatusCode, header},
+        response::{IntoResponse, Response},
+    };
+    use tokio::io::DuplexStream;
+    use tokio_util::io::ReaderStream;
+
+    use super::ZipResponseWriter;
+
+    /// A ZIP file response, that streams its contents to the client every time a file is added.
+    pub struct ZipResponse {
+        inner: ReaderStream<DuplexStream>,
+    }
+
+    impl ZipResponse {
+        /// Create a new [`ZipResponse`] with a default buffer size of 16KB.
+        pub fn new() -> (Self, ZipResponseWriter<DuplexStream>) {
+            Self::new_with_buffer_size(16 * 1024)
+        }
+
+        /// Create a new [`ZipResponse`] with a custom buffer size for the
+        /// underlying channel.
+        pub fn new_with_buffer_size(buffer_size: usize) -> (Self, ZipResponseWriter<DuplexStream>) {
+            let (reader, writer) = tokio::io::duplex(buffer_size);
+
+            (
+                Self {
+                    inner: ReaderStream::new(reader),
+                },
+                ZipResponseWriter::new(writer),
+            )
+        }
+
+        /// Convert this `ZipResponse` into an Axum [`Body`] stream.
+        pub fn into_body(self) -> Body {
+            Body::from_stream(self.inner)
+        }
+    }
+
+    impl IntoResponse for ZipResponse {
+        fn into_response(self) -> Response<Body> {
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "application/zip")],
+                self.into_body(),
+            )
+                .into_response()
+        }
     }
 }
