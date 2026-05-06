@@ -12,14 +12,14 @@ Typst Webservice compiles Typst templates into PDFs given a JSON input. Template
 
 ## Cargo features
 
-- `server` (default): enables the Axum-based HTTP server, the `typst-webservice` binary, and the `handlers` / `ZipResponse` types. Disable with `default-features = false` to use the library without any HTTP dependencies:
+- `server` (default): enables the Axum-based HTTP server, the `typst-webservice` binary, and the `handlers` module. Disable with `default-features = false` to use the library without any HTTP dependencies:
 
   ```toml
   [dependencies]
   typst-webservice = { version = "0.5", default-features = false }
   ```
 
-  The library-only build still exposes `PdfContext::render` (single PDF) and `PdfContext::render_batch` (ZIP of PDFs) alongside the lower-level `render_batch_to_writer` for streaming into a user-provided `AsyncWrite`.
+  The library-only build still exposes `PdfContext::render` (single PDF) and `PdfContext::render_batch` (streaming ZIP of PDFs) alongside the lower-level `render_batch_to_writer` for writing into a user-provided `AsyncWrite`.
 
 ## Getting Started
 
@@ -94,10 +94,12 @@ std::fs::write("out.pdf", pdf_bytes)?;
 
 ### Rendering a batch as a ZIP archive
 
-`PdfContext::render_batch` renders many templates in parallel and returns the resulting ZIP as `Vec<u8>`:
+`PdfContext::render_batch` renders many templates in parallel and returns a byte stream of the ZIP archive. Bytes are emitted as soon as each PDF is written into the archive, so the whole archive never sits in memory and callers can pipe the stream straight to a client:
 
 ```rust
 use std::sync::Arc;
+use tokio::io::AsyncReadExt;
+use tokio_util::io::StreamReader;
 use typst_webservice::{BatchRenderRequest, PdfContext};
 
 #[tokio::main]
@@ -117,17 +119,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     ];
 
-    let zip_bytes = PdfContext::render_batch(context, requests).await?;
-    std::fs::write("out.zip", zip_bytes)?;
+    let stream = PdfContext::render_batch(context, requests)?;
+
+    // Forward the stream wherever you like — e.g. into an async writer:
+    let mut reader = StreamReader::new(stream);
+    let mut file = tokio::fs::File::create("out.zip").await?;
+    tokio::io::copy(&mut reader, &mut file).await?;
     Ok(())
 }
 ```
 
-If any request references a template that is not loaded in the context, `render_batch` returns `AppError::MainSourceNotFound` before rendering starts. The call requires a Tokio runtime because rendering happens on a `spawn_blocking` pool and PDFs are fed through an async ZIP writer.
+If any request references a template that is not loaded in the context, `render_batch` returns `AppError::MainSourceNotFound` synchronously, before any bytes are produced — letting HTTP callers respond with a 4xx instead of a half-written body. The call requires a Tokio runtime because rendering happens on a `spawn_blocking` pool and the ZIP is written through an async writer in a background task.
 
-### Streaming into your own writer
+### Writing into your own `AsyncWrite`
 
-For large batches where you don't want to buffer the whole archive in memory, use `render_batch_to_writer` with any `tokio::io::AsyncWrite`:
+If you'd rather write the archive directly into a sink you already own — a file, an upload, a custom transport — use the lower-level `render_batch_to_writer` with any `tokio::io::AsyncWrite`:
 
 ```rust
 use std::sync::Arc;
