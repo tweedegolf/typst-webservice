@@ -32,4 +32,4 @@ required-features = ["server"]
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
-zip = "8.1"
+zip = "8.6"
