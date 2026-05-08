@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use axum::{
     Json,
+    body::Body,
     extract::{Path, State},
     http::header::{CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE},
     response::IntoResponse,
@@ -13,7 +14,6 @@ use crate::{
     CRATE_INFO,
     error::AppError,
     pdf::{BatchRenderRequest, PdfContext},
-    zip::ZipResponse,
 };
 
 const BATCH_ARCHIVE_NAME: &str = "rendered-pdfs.zip";
@@ -61,18 +61,9 @@ pub(crate) async fn render_pdf_batch(
 ) -> Result<impl IntoResponse, AppError> {
     info!(count = requests.len(), "Received batch PDF render request");
 
-    pdf_context.validate_batch(&requests)?;
+    let stream = PdfContext::render_batch(pdf_context, requests)?;
 
-    let (response, writer) = ZipResponse::new();
-    let context = Arc::clone(&pdf_context);
-
-    tokio::spawn(async move {
-        if let Err(error) = PdfContext::render_batch_to_writer(context, requests, writer).await {
-            tracing::error!(?error, "Failed to stream ZIP batch response");
-        }
-    });
-
-    Ok(Attachment::new(response.into_body())
+    Ok(Attachment::new(Body::from_stream(stream))
         .filename(BATCH_ARCHIVE_NAME)
         .content_type("application/zip"))
 }

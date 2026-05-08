@@ -5,7 +5,8 @@ use std::{
     sync::Arc,
     time::Instant,
 };
-use tokio::task::JoinSet;
+use tokio::{io::DuplexStream, task::JoinSet};
+use tokio_util::io::ReaderStream;
 use tracing::{debug, info, instrument, trace, warn};
 use typst::{
     Library, LibraryExt, World,
@@ -252,6 +253,11 @@ impl PdfContext {
             pdf_gen_start.elapsed().as_millis()
         );
 
+        // Typst caches compilation results via comemo. Each render produces a
+        // fresh PDF from a unique JSON payload, so the cache cannot help and
+        // would otherwise grow without bound — evict everything immediately.
+        comemo::evict(0);
+
         Ok(pdf_bytes)
     }
 
@@ -301,22 +307,31 @@ impl PdfContext {
         writer.finish().await
     }
 
-    /// Render a batch of templates and return the produced ZIP archive as
-    /// bytes in memory.
-    pub async fn render_batch(
+    /// Render a batch of templates and return the resulting ZIP archive as a
+    /// byte stream. Bytes are emitted as soon as each PDF is written into the
+    /// archive, so callers can pipe the stream straight to a client without
+    /// buffering the whole archive in memory.
+    ///
+    /// Validation runs synchronously: a missing template returns an error
+    /// before the stream starts, allowing the caller to surface a 4xx
+    /// response. Errors that occur mid-render are logged and terminate the
+    /// stream, since headers will already have been sent.
+    pub fn render_batch(
         context: Arc<Self>,
         requests: Vec<BatchRenderRequest>,
-    ) -> AppResult<Vec<u8>> {
+    ) -> AppResult<ReaderStream<DuplexStream>> {
         context.validate_batch(&requests)?;
 
-        let (mut reader, tx) = tokio::io::duplex(64 * 1024);
+        let (reader, tx) = tokio::io::duplex(64 * 1024);
         let writer = ZipResponseWriter::new(tx);
-        let render_handle = tokio::spawn(Self::render_batch_to_writer(context, requests, writer));
 
-        let mut buf = Vec::new();
-        tokio::io::copy(&mut reader, &mut buf).await?;
-        render_handle.await??;
-        Ok(buf)
+        tokio::spawn(async move {
+            if let Err(error) = Self::render_batch_to_writer(context, requests, writer).await {
+                tracing::error!(?error, "Failed to stream ZIP batch response");
+            }
+        });
+
+        Ok(ReaderStream::new(reader))
     }
 }
 
@@ -446,7 +461,12 @@ mod test {
             },
         ];
 
-        let zip_bytes = PdfContext::render_batch(context, requests).await.unwrap();
+        let stream = PdfContext::render_batch(context, requests).unwrap();
+        let mut reader = tokio_util::io::StreamReader::new(stream);
+        let mut zip_bytes = Vec::new();
+        tokio::io::AsyncReadExt::read_to_end(&mut reader, &mut zip_bytes)
+            .await
+            .unwrap();
         assert!(!zip_bytes.is_empty(), "expected non-empty zip");
 
         let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zip_bytes)).unwrap();
@@ -457,5 +477,40 @@ mod test {
             std::io::Read::read_to_end(&mut file, &mut content).unwrap();
             assert!(!content.is_empty(), "expected {name} to contain PDF data");
         }
+    }
+
+    /// Validation must surface a synchronous error before any stream is
+    /// produced, so callers can return a 4xx instead of streaming a body
+    /// that fails mid-flight.
+    #[tokio::test]
+    async fn render_batch_validates_synchronously() {
+        crate::logging::init_for_tests();
+        let context = Arc::new(PdfContext::from_directory("./assets").unwrap());
+
+        let requests = vec![BatchRenderRequest {
+            template: "does-not-exist.typ".to_string(),
+            file_name: "missing.pdf".to_string(),
+            input: serde_json::json!({}),
+        }];
+
+        let result = PdfContext::render_batch(context, requests);
+        assert!(matches!(result, Err(AppError::MainSourceNotFound(_))));
+    }
+
+    /// An empty batch should still produce a well-formed (empty) zip archive.
+    #[tokio::test]
+    async fn render_batch_with_empty_requests_produces_empty_zip() {
+        crate::logging::init_for_tests();
+        let context = Arc::new(PdfContext::from_directory("./assets").unwrap());
+
+        let stream = PdfContext::render_batch(context, Vec::new()).unwrap();
+        let mut reader = tokio_util::io::StreamReader::new(stream);
+        let mut zip_bytes = Vec::new();
+        tokio::io::AsyncReadExt::read_to_end(&mut reader, &mut zip_bytes)
+            .await
+            .unwrap();
+
+        let archive = zip::ZipArchive::new(std::io::Cursor::new(zip_bytes)).unwrap();
+        assert_eq!(archive.len(), 0);
     }
 }

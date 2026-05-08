@@ -6,17 +6,18 @@ edition = "2024"
 
 [features]
 default = ["server"]
-server = ["dep:axum", "dep:axum-extra", "dep:tokio-util"]
+server = ["dep:axum", "dep:axum-extra"]
 chrono = []
 
 [dependencies]
 axum = { version = "0.8", optional = true }
 axum-extra = { version = "0.12", features = ["attachment"], optional = true }
 tokio = { version = "1", features = ["full"] }
-tokio-util = { version = "0.7", features = ["io"], optional = true }
+tokio-util = { version = "0.7", features = ["io"] }
 serde = "1.0"
 typst = { version = "0.14" }
 typst-pdf = { version = "0.14" }
+comemo = "0.5"
 tracing = "0.1"
 serde_json = "1.0"
 thiserror = "2.0"
