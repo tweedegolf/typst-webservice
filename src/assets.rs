@@ -1,13 +1,20 @@
-use std::{collections::HashMap, fs, path::Path};
+use std::{collections::HashMap, fs, io, path::Path};
 
 use typst::{
     foundations::Bytes,
-    syntax::{FileId, Source, VirtualPath},
+    syntax::{FileId, RootedPath, Source, VirtualPath, VirtualRoot},
     text::Font,
 };
 
 use crate::error::AppResult;
 use tracing::{debug, trace};
+
+/// Build a project-rooted [`FileId`] from a (relative) path.
+pub(crate) fn file_id_from_path(path: &Path) -> AppResult<FileId> {
+    let vpath = VirtualPath::new(path.to_string_lossy())
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    Ok(FileId::new(RootedPath::new(VirtualRoot::Project, vpath)))
+}
 
 /// Represents the type of a file based on its extension.
 #[derive(Debug)]
@@ -63,7 +70,7 @@ impl Assets {
         match file_type {
             FileType::TypstSource => {
                 let content = fs::read_to_string(path)?;
-                let file_id = FileId::new(None, VirtualPath::new(relative_path));
+                let file_id = file_id_from_path(relative_path)?;
                 self.sources.push(Source::new(file_id, content));
                 debug!(file = %relative_path.display(), "Loaded Typst source file");
             }
@@ -80,7 +87,7 @@ impl Assets {
             }
             FileType::Other => {
                 let content = fs::read(path)?;
-                let file_id = FileId::new(None, VirtualPath::new(relative_path));
+                let file_id = file_id_from_path(relative_path)?;
                 self.assets.insert(file_id, Bytes::new(content));
                 debug!(file = %relative_path.display(), "Loaded binary asset");
             }
@@ -114,9 +121,8 @@ pub fn collect_dir_contents(dir: impl AsRef<Path>) -> AppResult<Assets> {
 
 #[cfg(test)]
 mod tests {
-    use super::collect_dir_contents;
+    use super::{collect_dir_contents, file_id_from_path};
     use std::path::Path;
-    use typst::syntax::{FileId, VirtualPath};
 
     /// Ensure the assets directory exposes the expected sources, assets, and fonts.
     #[test]
@@ -127,13 +133,13 @@ mod tests {
         let has_example_source = assets
             .sources
             .iter()
-            .any(|source| source.id().vpath().as_rootless_path() == Path::new("example.typ"));
+            .any(|source| source.id().vpath().get_without_slash() == "example.typ");
         assert!(
             has_example_source,
             "expected example.typ to be loaded as a source"
         );
 
-        let input_id = FileId::new(None, VirtualPath::new(Path::new("input.json")));
+        let input_id = file_id_from_path(Path::new("input.json")).unwrap();
         assert!(
             assets.assets.contains_key(&input_id),
             "expected input.json to be present in miscellaneous assets"

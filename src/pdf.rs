@@ -11,15 +11,15 @@ use tracing::{debug, info, instrument, trace, warn};
 use typst::{
     Library, LibraryExt, World,
     diag::{FileError, FileResult},
-    foundations::{Bytes, Datetime},
-    syntax::{FileId, Source, VirtualPath},
+    foundations::{Bytes, Datetime, Duration},
+    syntax::{FileId, Source},
     text::{Font, FontBook},
     utils::LazyHash,
 };
 use typst_pdf::{PdfOptions, PdfStandard, PdfStandards, Timestamp};
 
 use crate::{
-    assets::collect_dir_contents,
+    assets::{collect_dir_contents, file_id_from_path},
     error::{AppError, AppResult},
     zip::ZipResponseWriter,
 };
@@ -64,14 +64,14 @@ impl RenderInput {
         let main_source = context
             .sources
             .iter()
-            .find(|s| s.id().vpath().as_rootless_path().file_name() == Some(source_name.as_ref()))
+            .find(|s| s.id().vpath().file_name() == Some(source_name.as_str()))
             .cloned()
             .ok_or_else(|| AppError::MainSourceNotFound(source_name.clone()))?;
         trace!(template = %source_name, source_id = ?main_source.id(), "Resolved template source");
 
         // Prepare the input data as a virtual file
         let input_bytes = Bytes::new(serde_json::to_vec(&input)?);
-        let input_file_id = FileId::new(None, VirtualPath::new(Path::new("input.json")));
+        let input_file_id = file_id_from_path(Path::new("input.json"))?;
         trace!(file_id = ?input_file_id, "Encoded render input as virtual file");
 
         Ok(RenderInput {
@@ -134,7 +134,7 @@ impl PdfContext {
                 .extension()
                 .and_then(|ext| ext.to_str())
                 .map(|ext| ext.to_lowercase());
-            let file_id = FileId::new(None, VirtualPath::new(path));
+            let file_id = file_id_from_path(path)?;
 
             match ext.as_deref() {
                 Some("typ") | Some("typst") => {
@@ -166,15 +166,9 @@ impl PdfContext {
 
     /// Check whether a template with the provided name exists in the context.
     pub fn has_template(&self, source_name: &str) -> bool {
-        self.sources.iter().any(|source| {
-            source
-                .id()
-                .vpath()
-                .as_rootless_path()
-                .file_name()
-                .and_then(|name| name.to_str())
-                == Some(source_name)
-        })
+        self.sources
+            .iter()
+            .any(|source| source.id().vpath().file_name() == Some(source_name))
     }
 
     /// Return the available template file names in stable sorted order.
@@ -182,15 +176,7 @@ impl PdfContext {
         let mut templates = self
             .sources
             .iter()
-            .filter_map(|source| {
-                source
-                    .id()
-                    .vpath()
-                    .as_rootless_path()
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .map(str::to_owned)
-            })
+            .filter_map(|source| source.id().vpath().file_name().map(str::to_owned))
             .collect::<Vec<_>>();
         templates.sort();
         templates
@@ -361,7 +347,7 @@ impl World for RenderInput {
         }
 
         trace!(?id, "Source file not found");
-        Err(FileError::NotFound(id.vpath().as_rootless_path().into()))
+        Err(FileError::NotFound(id.vpath().get_without_slash().into()))
     }
 
     /// Retrieve a binary asset by its ID, including the injected JSON input.
@@ -382,7 +368,7 @@ impl World for RenderInput {
             })
             .ok_or_else(|| {
                 trace!(?id, "Binary asset not found");
-                FileError::NotFound(id.vpath().as_rootless_path().into())
+                FileError::NotFound(id.vpath().get_without_slash().into())
             })
     }
 
@@ -391,10 +377,10 @@ impl World for RenderInput {
         self.context.fonts.get(index).cloned()
     }
 
-    /// Provide the current date, optionally offset by hours, to the document.
-    fn today(&self, offset: Option<i64>) -> Option<Datetime> {
+    /// Provide the current date, optionally offset by a duration, to the document.
+    fn today(&self, offset: Option<Duration>) -> Option<Datetime> {
         let datetime = match offset {
-            Some(offset) => chrono::Utc::now() + chrono::Duration::hours(offset),
+            Some(offset) => chrono::Utc::now() + chrono::Duration::seconds(offset.seconds() as i64),
             None => chrono::Utc::now(),
         };
         trace!(?offset, ?datetime, "Providing current datetime");
